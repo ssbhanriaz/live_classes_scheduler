@@ -20,7 +20,7 @@ TIMEZONE = "Asia/Karachi"
 DEFAULT_DURATION_MIN = 60
 
 ORDINAL_RE = re.compile(r"(\d+)(st|nd|rd|th)", re.IGNORECASE)
-TRACK_RE = re.compile(r"\((.*?)\)\s*$") 
+TRACK_RE = re.compile(r"\((.*?)\)\s*$")
 
 
 def get_calendar_service():
@@ -34,6 +34,7 @@ def get_calendar_service():
         else:
             flow = InstalledAppFlow.from_client_secrets_file("credentials.json", SCOPES)
             creds = flow.run_local_server(port=0)
+
         with open("token.json", "w", encoding="utf-8") as f:
             f.write(creds.to_json())
 
@@ -46,10 +47,7 @@ def clean_ordinal_date(s: str) -> str:
 
 def parse_dates(date_text: str) -> list[datetime]:
     parts = [p.strip() for p in date_text.split("/") if p.strip()]
-    out = []
-    for p in parts:
-        out.append(datetime.strptime(clean_ordinal_date(p), "%d %b %Y"))
-    return out
+    return [datetime.strptime(clean_ordinal_date(p), "%d %b %Y") for p in parts]
 
 
 def extract_pkt_time(time_text: str) -> str | None:
@@ -84,13 +82,16 @@ def calendar_has_key(service, key: str, day_start: datetime, day_end: datetime) 
     return len(resp.get("items", [])) > 0
 
 
-def create_event(service, summary: str, description: str, start_dt: datetime, end_dt: datetime):
+def create_event(service, summary: str, description: str, start_dt: datetime, end_dt: datetime) -> bool:
+    """
+    Returns True if inserted, False if skipped as duplicate.
+    """
     key = make_key(summary, start_dt.isoformat())
     day_start = start_dt.replace(hour=0, minute=0, second=0, microsecond=0)
     day_end = day_start + timedelta(days=1)
 
     if calendar_has_key(service, key, day_start, day_end):
-        return
+        return False
 
     event = {
         "summary": summary,
@@ -101,6 +102,7 @@ def create_event(service, summary: str, description: str, start_dt: datetime, en
         "reminders": {"useDefault": True},
     }
     service.events().insert(calendarId=CALENDAR_ID, body=event).execute()
+    return True
 
 
 def pick_best_table(soup: BeautifulSoup):
@@ -131,7 +133,7 @@ def scrape_schedule():
         raise RuntimeError("Could not find schedule table.")
 
     results = []
-    seen_rows = set() 
+    seen_rows = set()
 
     rows = table.find_all("tr")
     for tr in rows[1:]:
@@ -147,12 +149,11 @@ def scrape_schedule():
         title = strip_track_from_title(class_name_full)
         track = extract_track(class_name_full)
 
+        # Exclusions
         if "IELTS" in title.upper():
             continue
-
         if "TBD" in date_text.upper() or "TBD" in time_text.upper():
             continue
-
         if "MONDAY TO FRIDAY" in date_text.upper():
             continue
 
@@ -170,13 +171,15 @@ def scrape_schedule():
         except Exception:
             continue
 
-        results.append({
-            "title": title,
-            "track": track,
-            "instructor": instructor,
-            "dates": dates,
-            "pkt_time": pkt_time,
-        })
+        results.append(
+            {
+                "title": title,
+                "track": track,
+                "instructor": instructor,
+                "dates": dates,
+                "pkt_time": pkt_time,
+            }
+        )
 
     return results
 
@@ -203,12 +206,12 @@ def choose_tracks_by_program(all_tracks: set[str], choice: int) -> set[str]:
     sysops = {t for t in all_tracks if contains_kw(t, "sysops")}
 
     if choice == 1:
-        return set(ccs)
+        return ccs
     if choice == 2:
-        return set(devops) | set(ccs)
+        return devops | ccs
     if choice == 3:
-        return set(sysops) | set(ccs)
-    return set(all_tracks)  
+        return sysops | ccs
+    return set(all_tracks)
 
 
 def main():
@@ -228,8 +231,7 @@ def main():
     for t in sorted(allowed_tracks):
         print(" - " + t)
 
-        seen_in_run = set()
-
+    seen_in_run = set()
     created = 0
     skipped = 0
 
@@ -237,10 +239,10 @@ def main():
         if it["track"] not in allowed_tracks:
             continue
 
-        t = datetime.strptime(it["pkt_time"], "%I:%M %p")
+        parsed_time = datetime.strptime(it["pkt_time"], "%I:%M %p")
 
         for d in it["dates"]:
-            start_dt = datetime(d.year, d.month, d.day, t.hour, t.minute, tzinfo=local_tz)
+            start_dt = datetime(d.year, d.month, d.day, parsed_time.hour, parsed_time.minute, tzinfo=local_tz)
             end_dt = start_dt + timedelta(minutes=DEFAULT_DURATION_MIN)
 
             in_run_key = (it["title"], start_dt.isoformat())
@@ -249,17 +251,19 @@ def main():
                 continue
             seen_in_run.add(in_run_key)
 
-            before = created
-            create_event(
+            inserted = create_event(
                 service=service,
                 summary=it["title"],
                 description=f"Instructor: {it['instructor']}\nTrack: {it['track']}",
                 start_dt=start_dt,
                 end_dt=end_dt,
             )
-            created += 1 if created == before else 0
+            if inserted:
+                created += 1
+            else:
+                skipped += 1
 
-    print("\nImport finished.")
+    print(f"\nImport finished. Created: {created}, Skipped: {skipped}")
 
 
 if __name__ == "__main__":
