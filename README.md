@@ -27,7 +27,7 @@ Setup Instructions
 
 1. Clone the repository
 
-git clone https://github.com/YOUR_USERNAME/alnafi-live-schedule-to-google-calendar.git
+git clone https://github.com/ssbhanriaz/live_classes_scheduler.git
 cd alnafi-live-schedule-to-google-calendar
 
 2. Install dependencies
@@ -58,6 +58,7 @@ Place it in the project directory
 
 4. Run the importer
 python live_schedule_to_calender.py
+
 On first run:
 
 A browser window will open
